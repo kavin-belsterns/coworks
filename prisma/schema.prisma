@@ -1,0 +1,10 @@
+// Models arrive through aidlc-spec (specs/01-data.md). Naming: PascalCase model, @@map to snake_case plural.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}

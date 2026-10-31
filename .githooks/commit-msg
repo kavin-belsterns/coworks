@@ -1,0 +1,69 @@
+#!/bin/sh
+# AI-DLC commit-msg hook. POSIX sh. Usage: commit-msg.sh <message-file>
+# Rejects a commit unless:
+#   1. the first line is Conventional Commits 1.0.0 and 72 characters or fewer
+#   2. the body has a "Requirement:" trailer (FR-001,NFR-002 or none for chores)
+#   3. the body has a "Tests run" marker
+# Source: https://www.conventionalcommits.org/en/v1.0.0/ and https://git-scm.com/docs/githooks
+
+msg_file="$1"
+if [ -z "$msg_file" ] || [ ! -f "$msg_file" ]; then
+  echo "commit-msg: no message file given." >&2
+  exit 1
+fi
+
+# Drop git comment lines (start with #) into a clean copy.
+clean=$(mktemp "${TMPDIR:-/tmp}/aidlc-msg.XXXXXX") || exit 1
+trap 'rm -f "$clean"' EXIT
+grep -v '^#' "$msg_file" > "$clean"
+
+subject=$(sed -n '1p' "$clean")
+
+fail() {
+  echo "" >&2
+  echo "commit-msg rejected: $1" >&2
+  echo "Fix: $2" >&2
+  echo "See standards/git.md and templates/commit.md." >&2
+  exit 1
+}
+
+# Let git-generated merge and revert-by-git messages through.
+case "$subject" in
+  "Merge "*|"Revert \""*|"fixup! "*|"squash! "*) exit 0 ;;
+esac
+
+types='feat|fix|refactor|perf|test|docs|build|ci|chore|style|revert'
+if ! printf '%s\n' "$subject" | grep -Eq "^($types)(\\([a-z0-9._/-]+\\))?!?: [^ ].*"; then
+  fail "first line is not Conventional Commits: '$subject'" \
+       "use 'type(scope): description'. Types: $(printf '%s' "$types" | tr '|' ' ')."
+fi
+
+len=$(printf '%s' "$subject" | wc -c | tr -d ' ')
+if [ "$len" -gt 72 ]; then
+  fail "first line is $len characters. Limit is 72." "shorten the description."
+fi
+
+if ! grep -Eq '^Requirement: .+' "$clean"; then
+  fail "missing 'Requirement:' trailer." \
+       "add a line 'Requirement: FR-001,FR-002'. Use 'Requirement: none' for chores."
+fi
+
+req=$(grep -E '^Requirement: ' "$clean" | tail -n 1 | sed 's/^Requirement: *//; s/ *$//')
+if [ "$req" = "none" ]; then
+  type=$(printf '%s\n' "$subject" | sed -E 's/^([a-z]+).*/\1/')
+  case "$type" in
+    chore|docs|ci|build|style|revert|test) : ;;
+    *) fail "'Requirement: none' is only allowed for chore, docs, ci, build, style, test and revert." \
+            "name the requirement ids, for example 'Requirement: FR-001'." ;;
+  esac
+elif ! printf '%s\n' "$req" | grep -Eq '^[A-Za-z]+-[0-9]+(, ?[A-Za-z]+-[0-9]+)*$'; then
+  fail "bad Requirement value '$req'." \
+       "use ids like FR-001,NFR-002 or the word none."
+fi
+
+if ! grep -Eqi 'tests? run' "$clean"; then
+  fail "missing 'Tests run' section in the body." \
+       "add 'Tests run' with the command and its result line. For chores write 'Tests run: none, <reason>'."
+fi
+
+exit 0

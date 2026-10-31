@@ -1,0 +1,84 @@
+# Sources: report 05 section C. Versions: per page at fetch time 2026-10-31.
+# Trivy: https://github.com/aquasecurity/trivy-action
+# CodeQL: https://github.com/github/codeql-action (init and analyze inputs UNVERIFIED, memory)
+# ZAP: https://github.com/zaproxy/action-baseline
+name: Security
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1'
+permissions:
+  contents: read
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln,secret'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:javascript-typescript'
+
+  zap-baseline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d app_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app_test
+      AUTH_SECRET: ci-placeholder
+      BASE_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      - run: npm ci
+      - run: npx prisma migrate deploy && npx prisma db seed
+      - run: npm run build
+      - name: Start app
+        run: |
+          npm run start &
+          for i in $(seq 1 30); do curl -sf http://localhost:3000 >/dev/null && exit 0; sleep 2; done
+          exit 1
+      # Baseline scan. Reaching localhost from the action container is UNVERIFIED.
+      - uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: 'http://localhost:3000'
+          fail_action: false
